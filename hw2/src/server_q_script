@@ -1,0 +1,4 @@
+# Bash
+for ((i=1; i <= 15; i++)) do
+    /usr/bin/time -v ./build/server_q 2222 > ./server_out/$i.txt & ./client -a $i -s 15 -n 1000 2222 > /dev/null
+done

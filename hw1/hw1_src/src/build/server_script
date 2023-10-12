@@ -1,0 +1,4 @@
+# Bash
+for ((i=1; i <= 12; i++)) do
+    /usr/bin/time -v ./server 2222 > /dev/null & ./client -a $i -s 12 -n 30 2222 > /dev/null
+done
