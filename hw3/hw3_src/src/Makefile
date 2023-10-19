@@ -35,7 +35,7 @@
 ###############################################################################
 
 
-TARGETS = server_lim server_multi
+TARGETS = server_lim
 LIBS = timelib
 LDFLAGS = -lm -lpthread
 BUILDDIR = build

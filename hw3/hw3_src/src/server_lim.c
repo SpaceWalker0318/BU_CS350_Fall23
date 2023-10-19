@@ -70,20 +70,24 @@ struct request_meta
 	struct timespec completion_timestamp;
 };
 
-struct response_meta
+struct Node
 {
-	struct response response;
-	uint8_t rejected;
+	struct request_meta req_meta;
+	struct Node *next;
 };
 
 struct queue
 {
-	/* ADD REQUIRED FIELDS */
+	/* IMPLEMENT ME */
+	struct Node *front;
+	struct Node *rear;
+	int curr_size;
+	int max_size;
 };
 
 struct connection_params
 {
-	/* ADD REQUIRED FIELDS */
+	size_t queue_size;
 };
 
 struct worker_params
@@ -97,6 +101,22 @@ struct worker_params
 void queue_init(struct queue *the_queue, size_t queue_size)
 {
 	/* IMPLEMENT ME !! */
+
+	/* Initialize the queue */
+	the_queue->front = NULL;
+	the_queue->rear = NULL;
+	the_queue->curr_size = 0;
+	the_queue->max_size = queue_size;
+}
+
+/* Check if the queue is full*/
+int is_queue_full(struct queue *the_queue)
+{
+	if (the_queue->curr_size == the_queue->max_size)
+	{
+		return 1;
+	}
+	return 0;
 }
 
 /* Add a new request <request> to the shared queue <the_queue> */
@@ -109,17 +129,32 @@ int add_to_queue(struct request_meta to_add, struct queue *the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+	struct Node *newNode = (struct Node *)malloc(sizeof(struct Node));
+	newNode->req_meta = to_add;
+	newNode->next = NULL;
 
 	/* Make sure that the queue is not full */
-	if (/* Condition to check for full queue */)
+	if (is_queue_full(the_queue))
 	{
 		/* What to do in case of a full queue */
 		/* DO NOT RETURN DIRECTLY HERE */
+		retval = 1;
 	}
 	else
 	{
 		/* If all good, add the item in the queue */
 		/* IMPLEMENT ME !!*/
+		if (the_queue->front == NULL && the_queue->rear == NULL)
+		{
+			the_queue->front = newNode;
+			the_queue->rear = newNode;
+		}
+		else
+		{
+			the_queue->rear->next = newNode;
+			the_queue->rear = newNode;
+		}
+		the_queue->curr_size++;
 
 		/* QUEUE SIGNALING FOR CONSUMER --- DO NOT TOUCH */
 		sem_post(queue_notify);
@@ -135,6 +170,7 @@ int add_to_queue(struct request_meta to_add, struct queue *the_queue)
 struct request_meta get_from_queue(struct queue *the_queue)
 {
 	struct request_meta retval;
+	// retval.request.req_id = -1; // Assume req_id is signed, -1 represents an empty queue
 	/* QUEUE PROTECTION INTRO START --- DO NOT TOUCH */
 	sem_wait(queue_notify);
 	sem_wait(queue_mutex);
@@ -142,7 +178,24 @@ struct request_meta get_from_queue(struct queue *the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+	if (the_queue->front == NULL)
+	{
+		// handle appropriately, perhaps by returning an error request or empty request.
+		goto OUTRO;
+	}
+	struct Node *current = the_queue->front;
+	retval = current->req_meta;
+	the_queue->front = current->next;
 
+	if (the_queue->front == NULL)
+	{
+		// If front is NULL, then the queue is empty, so rear should also be NULL
+		the_queue->rear = NULL;
+	}
+	free(current);
+	the_queue->curr_size--;
+
+OUTRO:
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
 	/* QUEUE PROTECTION OUTRO END --- DO NOT TOUCH */
@@ -157,6 +210,16 @@ void dump_queue_status(struct queue *the_queue)
 
 	/* WRITE YOUR CODE HERE! */
 	/* MAKE SURE NOT TO RETURN WITHOUT GOING THROUGH THE OUTRO CODE! */
+	printf("Q:[");
+	struct Node *current = the_queue->front;
+	while (current != NULL)
+	{
+		printf("R%llu", current->req_meta.request.req_id);
+		if (current->next != NULL)
+			printf(",");
+		current = current->next;
+	}
+	printf("]\n");
 
 	/* QUEUE PROTECTION OUTRO START --- DO NOT TOUCH */
 	sem_post(queue_mutex);
@@ -176,8 +239,29 @@ int worker_main(void *arg)
 	/* Okay, now execute the main logic. */
 	while (!params->worker_done)
 	{
-
 		/* IMPLEMENT ME !! Main worker logic. */
+		struct request_meta req_meta;
+		struct response resp;
+		req_meta = get_from_queue(params->the_queue);
+		// if (req_meta.request.req_id == -1)
+		// {
+		// 	// If the queue is empty, then we should just continue
+		// 	continue;
+		// }
+
+		clock_gettime(CLOCK_MONOTONIC, &req_meta.start_timestamp);
+		busywait_timespec(req_meta.request.req_length);
+		clock_gettime(CLOCK_MONOTONIC, &req_meta.completion_timestamp);
+
+		resp.req_id = req_meta.request.req_id;
+		send(params->conn_socket, &resp, sizeof(struct response), 0);
+
+		printf("R%ld:%lf,%lf,%lf,%lf,%lf\n", req_meta.request.req_id,
+			   TSPEC_TO_DOUBLE(req_meta.request.req_timestamp),
+			   TSPEC_TO_DOUBLE(req_meta.request.req_length),
+			   TSPEC_TO_DOUBLE(req_meta.receipt_timestamp),
+			   TSPEC_TO_DOUBLE(req_meta.start_timestamp),
+			   TSPEC_TO_DOUBLE(req_meta.completion_timestamp));
 
 		dump_queue_status(params->the_queue);
 	}
@@ -189,8 +273,21 @@ int worker_main(void *arg)
  * clone() system call*/
 int start_worker(void *params, void *worker_stack)
 {
-	/* IMPLEMENT ME !! */
+	int retval;
+
+	/* Throw an error if no stack was passed. */
+	if (worker_stack == NULL)
+		return -1;
+
+	retval = clone(worker_main, worker_stack + STACK_SIZE,
+				   CLONE_THREAD | CLONE_VM | CLONE_SIGHAND,
+				   params);
+
+	return retval;
 }
+
+/* Variable used to control termination of the worker thread */
+int worker_done = 0;
 
 /* Main function to handle connection with the client. This function
  * takes in input conn_socket and returns only when the connection
@@ -205,18 +302,32 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 	 * ready to start the worker thread. */
 	void *worker_stack = malloc(STACK_SIZE);
 	struct worker_params worker_params;
+	struct timespec reject_timestamp;
 	int worker_id, res;
 
 	/* Now handle queue allocation and initialization */
 	/* IMPLEMENT ME !!*/
 
+	the_queue = (struct queue *)malloc(sizeof(struct queue));
+	queue_init(the_queue, conn_params.queue_size);
+
 	/* Prepare worker_parameters */
 	/* IMPLEMENT ME !!*/
+	worker_params.conn_socket = conn_socket;
+	worker_params.worker_done = worker_done;
+	worker_params.the_queue = the_queue;
+
 	worker_id = start_worker(&worker_params, worker_stack);
 
 	if (worker_id < 0)
 	{
 		/* HANDLE WORKER CREATION ERROR */
+		free(worker_stack);
+		free(the_queue);
+		ERROR_INFO();
+		perror("Unable to create worker thread");
+		/* TODO fix premature return without socket shutdown */
+		return;
 	}
 
 	printf("INFO: Worker thread started. Thread ID = %d\n", worker_id);
@@ -229,6 +340,8 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 	do
 	{
 		/* IMPLEMENT ME: Receive next request from socket. */
+		in_bytes = recv(conn_socket, &req->request, sizeof(struct request), 0);
+		clock_gettime(CLOCK_MONOTONIC, &req->receipt_timestamp);
 
 		/* Don't just return if in_bytes is 0 or -1. Instead
 		 * skip the response and break out of the loop in an
@@ -236,6 +349,27 @@ void handle_connection(int conn_socket, struct connection_params conn_params)
 		 * and resp varaibles, and shutdown the socket. */
 
 		/* IMPLEMENT ME: Attempt to enqueue or reject request! */
+		if (in_bytes > 0)
+		{
+			res = add_to_queue(*req, the_queue);
+			if (res == 1)
+			{
+				clock_gettime(CLOCK_MONOTONIC, &reject_timestamp);
+				struct response resp;
+				resp.req_id = req->request.req_id;
+				resp.ack = 1;
+				send(conn_socket, &resp, sizeof(struct response), 0);
+				printf("X%ld:%lf,%lf,%lf\n", req->request.req_id,
+					   TSPEC_TO_DOUBLE(req->request.req_timestamp),
+					   TSPEC_TO_DOUBLE(req->request.req_length),
+					   TSPEC_TO_DOUBLE(reject_timestamp));
+			}
+		}
+		else
+		{
+			break;
+		}
+
 	} while (in_bytes > 0);
 
 	/* Ask the worker thead to terminate */
@@ -277,19 +411,34 @@ int main(int argc, char **argv)
 
 	/* 1. Detect the -q parameter and set aside the queue size in conn_params */
 	/* 2. Detect the port number to bind the server socket to (see HW1 and HW2) */
-	socket_port = ...;
-	if (argc > 2)
+	while ((opt = getopt(argc, argv, "q:")) != -1)
 	{
-
-		socket_port = strtol(argv[1], NULL, 10);
-		conn_params.queue_size = strtol(argv[2], NULL, 10);
-		printf("INFO: setting server port as: %d\n", socket_port);
-		printf("INFO: setting queue size as: %d\n", conn_params.queue_size")
+		switch (opt)
+		{
+		case 'q':
+			conn_params.queue_size = strtol(optarg, NULL, 10);
+			if (conn_params.queue_size <= 0)
+			{
+				fprintf(stderr, "Invalid queue size\n");
+				return EXIT_FAILURE;
+			}
+			break;
+		default:
+			fprintf(stderr, "Usage: %s [-q queue_size] port_number\n", argv[0]);
+			return EXIT_FAILURE;
+		}
 	}
-	else
+
+	if (optind >= argc)
 	{
-		ERROR_INFO();
-		fprintf(stderr, USAGE_STRING, argv[0]);
+		fprintf(stderr, "Expected argument after options\n");
+		return EXIT_FAILURE;
+	}
+
+	socket_port = strtol(argv[optind], NULL, 10);
+	if (socket_port <= 0 || socket_port > 65535)
+	{
+		fprintf(stderr, "Invalid port number\n");
 		return EXIT_FAILURE;
 	}
 

@@ -1,0 +1,7 @@
+#Bash
+for ((i=10; i <= 19; i++)) do
+    /usr/bin/time -v ./build/server_lim -q 1000 2222 > ./server_lim_out_c1/$i.txt & ./client -a $i -s 20 -n 1500 -d 1 2222 > /dev/null
+done
+
+# ./build/server_lim -q 10 2222 > server_lim_out_4.txt & ./client -a 18 -s 20 -n 1500 -d 0 2222
+# ./build/server_lim -q 10 2222 > server_lim_out_5.txt & ./client -a 18 -s 20 -n 1500 -d 1 2222
